@@ -12,9 +12,28 @@ the SPA and the API on `127.0.0.1`.
 │       │ navigates to        │
 │       ▼                     │
 │  http://127.0.0.1:9119  ◄───┼── hermes-desktop sidecar (PyInstaller onedir)
-└─────────────────────────────┘     exe ~20 MB + _internal ~67 MB
+└─────────────────────────────┘     ~460 MB: dashboard + bundled backends
                                      FastAPI/uvicorn + SPA (web_dist) embedded
 ```
+
+## What ships (the `desktop` extra)
+
+A normal install lazy-installs opt-in backends on first use via
+`tools/lazy_deps.py`. A frozen PyInstaller bundle can't pip-install at runtime,
+so the desktop app **eager-bundles** its supported backends. The set is defined
+once as the `desktop` extra in `pyproject.toml`; the build installs `.[desktop]`
+and the spec packs whatever the venv contains (the venv *is* the manifest).
+
+Bundled: providers (anthropic, bedrock, azure-identity), search (exa, firecrawl,
+parallel), TTS (edge, elevenlabs), image (fal), memory (honcho, hindsight),
+messaging (telegram, discord, slack), dingtalk, feishu, terminals (modal,
+daytona, vercel), mcp, google-workspace, youtube, acp.
+
+Excluded on purpose:
+- **voice / faster-whisper** — pulls ctranslate2 + av + onnxruntime + numpy
+  (~370 MB) and still downloads model weights at runtime; left for on-demand.
+- **matrix** (`mautrix[encryption]` → `python-olm`) — Linux-only wheels, no
+  Windows/macOS build path, so it would break the cross-platform build.
 
 On launch the shell shows `ui/index.html` (a splash), starts the sidecar, waits
 for the port to accept connections, then navigates the window to the live
@@ -36,27 +55,32 @@ the copy step also `chmod +x`es the binary in the writable location.
 | Path | What |
 |------|------|
 | `launcher.py` | Frozen entry point — boots the dashboard headless, points the static mount at the bundled SPA via `HERMES_WEB_DIST`. |
-| `hermes-desktop.spec` | PyInstaller spec → onedir `hermes-desktop/` (core + `web` extra, SPA embedded). |
+| `hermes-desktop.spec` | PyInstaller spec → onedir `hermes-desktop/`; packs every package in the build venv (the `.[desktop]` set), SPA embedded. |
 | `tauri/ui/index.html` | Splash shown until the server is ready. |
 | `tauri/src-tauri/` | Tauri app: `lib.rs` (copy/chmod/spawn + navigate), `tauri.conf.json`, `capabilities/`, `icons/`. |
 | `tauri/src-tauri/sidecar/` | The onedir bundle, staged by the build as a Tauri resource (git-ignored). |
 | `../../.github/workflows/desktop.yml` | macOS / Windows / Linux build matrix. |
 
-## Sizes (Linux build)
+## Sizes (Linux build, `.[desktop]` set)
 
 | | |
 |---|---|
-| `.deb` (xz-compressed) | ~46 MB |
-| Installed on disk | ~93 MB |
-| First-run copy to `app_data_dir` | ~86 MB (one-time, then reused) |
+| onedir sidecar | ~460 MB |
+| `.deb` (xz-compressed) | ~200 MB (estimate) |
+| First-run copy to `app_data_dir` | ~460 MB (one-time, then reused) |
+
+Dashboard-only (no extra backends) is ~86 MB onedir / ~46 MB `.deb` if you
+swap `.[desktop]` for `.[web]` in the build.
 
 ## Scope & known limitations
 
-- **Dashboard only.** Optional backends (voice, matrix, messaging, alt
-  providers) are excluded — they lazy-install via `tools/lazy_deps.py` at
-  runtime, which does **not** work inside a frozen bundle (no pip, read-only
-  bundle). Bundling them or routing lazy installs to a user-writable venv is a
-  follow-up.
+- **Excluded backends.** voice/faster-whisper and matrix are not bundled (see
+  above). faster-whisper also downloads model weights at runtime, so bundling
+  it would not make voice fully offline anyway.
+- **No runtime install.** Unlike a normal install, the frozen bundle can't
+  lazy-install new backends — `tools/lazy_deps.py` would need a user-writable
+  target on `sys.path` to work here (a possible follow-up). For now, what ships
+  is the `desktop` extra and nothing more.
 - **No cross-compilation.** Each OS builds its own sidecar + installer; that is
   why the workflow uses a per-OS matrix.
 - Unsigned. macOS/Windows code signing + notarization are not configured.
@@ -67,9 +91,10 @@ the copy step also `chmod +x`es the binary in the writable location.
 # 1. Build the SPA (writes to hermes_cli/web_dist)
 cd web && npm ci && npm run build && cd ..
 
-# 2. Build the Python sidecar (onedir)
+# 2. Build the Python sidecar (onedir). `.[desktop]` bundles the backends;
+#    use `.[web]` for a lean dashboard-only build.
 uv venv .venv-desktop --python 3.11
-VIRTUAL_ENV=.venv-desktop uv pip install -e ".[web]" pyinstaller
+VIRTUAL_ENV=.venv-desktop uv pip install -e ".[desktop]" pyinstaller
 VIRTUAL_ENV=.venv-desktop .venv-desktop/bin/pyinstaller \
   packaging/desktop/hermes-desktop.spec \
   --distpath packaging/desktop/dist --workpath packaging/desktop/build --noconfirm

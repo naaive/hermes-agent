@@ -171,6 +171,49 @@ youtube = [
 ]
 # `hermes dashboard` (localhost SPA + API).  Not in core to keep the default install lean.
 web = ["fastapi==0.133.1", "uvicorn[standard]==0.41.0"]
+# Desktop bundle feature set (packaging/desktop). Unlike a normal install —
+# where opt-in backends lazy-install on first use via tools/lazy_deps.py — a
+# frozen PyInstaller bundle can't pip-install at runtime, so the desktop app
+# eager-bundles its supported backends here. This is the single source of truth
+# for "what ships in the desktop app": the build installs `.[desktop]` and the
+# PyInstaller spec packs whatever the venv contains.
+#
+# Excluded on purpose:
+#   - voice (faster-whisper): pulls ctranslate2 + av + onnxruntime + numpy
+#     (~370 MB) and still downloads model weights at runtime — not worth the
+#     bundle size; left for on-demand.
+#   - matrix (mautrix[encryption] -> python-olm): Linux-only wheels, no
+#     Windows/macOS build path (see [project.dependencies] preamble), so it
+#     would break the cross-platform build.
+#   - dev: build/test tooling (pytest, ruff, ty, debugpy) never ships.
+desktop = [
+  "hermes-agent[web]",
+  "hermes-agent[cli]",
+  "hermes-agent[pty]",
+  "hermes-agent[mcp]",
+  "hermes-agent[homeassistant]",
+  "hermes-agent[sms]",
+  "hermes-agent[acp]",
+  "hermes-agent[google]",
+  "hermes-agent[youtube]",
+  "hermes-agent[anthropic]",
+  "hermes-agent[bedrock]",
+  "hermes-agent[azure-identity]",
+  "hermes-agent[exa]",
+  "hermes-agent[firecrawl]",
+  "hermes-agent[parallel-web]",
+  "hermes-agent[edge-tts]",
+  "hermes-agent[tts-premium]",
+  "hermes-agent[fal]",
+  "hermes-agent[honcho]",
+  "hermes-agent[hindsight]",
+  "hermes-agent[messaging]",
+  "hermes-agent[dingtalk]",
+  "hermes-agent[feishu]",
+  "hermes-agent[modal]",
+  "hermes-agent[daytona]",
+  "hermes-agent[vercel]",
+]
 all = [
   # Policy (2026-05-12): `[all]` includes only extras that genuinely
   # CAN'T be lazy-installed via `tools/lazy_deps.py` — i.e. things every
