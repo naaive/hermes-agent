@@ -1,3 +1,0 @@
-# Per-platform PyInstaller sidecar binaries are built in CI, not committed.
-*
-!.gitignore

@@ -1,18 +1,78 @@
+use std::fs;
 use std::net::{SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::{Manager, RunEvent};
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
-use tauri_plugin_shell::ShellExt;
+use tauri::{AppHandle, Manager, RunEvent};
 
 const PORT: u16 = 9119;
 
-// Holds the Python dashboard child so it can be killed when the app exits.
-struct SidecarChild(Mutex<Option<CommandChild>>);
+// Holds the dashboard child so it can be killed when the app exits.
+struct SidecarChild(Mutex<Option<Child>>);
 
-// The dashboard binds the port before it can serve; a successful TCP connect is
-// our readiness signal (uvicorn accepts connections only once it is serving).
+fn sidecar_exe_name() -> &'static str {
+    if cfg!(windows) {
+        "hermes-desktop.exe"
+    } else {
+        "hermes-desktop"
+    }
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+// The onedir sidecar is shipped as a read-only Tauri resource. Tauri does not
+// preserve the executable bit on resources, and the resource dir is read-only
+// on macOS (signed .app) and on a system-wide Linux install. So on first run —
+// and whenever the app version changes — copy the bundle to a writable per-user
+// dir, mark it with the version, and make the binary executable. Subsequent
+// launches reuse it and spawn instantly (no per-launch extraction).
+fn ensure_sidecar(app: &AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let src = app.path().resource_dir()?.join("sidecar");
+    let version = app.package_info().version.to_string();
+
+    let dest = app.path().app_data_dir()?.join("sidecar");
+    let marker = dest.join(".version");
+    let exe = dest.join(sidecar_exe_name());
+
+    let up_to_date = exe.exists()
+        && fs::read_to_string(&marker)
+            .map(|v| v.trim() == version)
+            .unwrap_or(false);
+
+    if !up_to_date {
+        if dest.exists() {
+            fs::remove_dir_all(&dest)?;
+        }
+        copy_dir_all(&src, &dest)?;
+        fs::write(&marker, &version)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = fs::metadata(&exe)?.permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&exe, perm)?;
+        }
+    }
+
+    Ok(exe)
+}
+
+// A successful TCP connect means uvicorn is accepting connections, i.e. serving.
 fn wait_for_port(port: u16, timeout: Duration) -> bool {
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
     let deadline = Instant::now() + timeout;
@@ -28,32 +88,13 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .manage(SidecarChild(Mutex::new(None)))
         .setup(|app| {
-            // Spawn the bundled Python dashboard (onefile PyInstaller binary
-            // declared in tauri.conf.json -> bundle.externalBin).
-            let (mut rx, child) = app
-                .shell()
-                .sidecar("hermes-desktop")?
+            let exe = ensure_sidecar(app.handle())?;
+            let child = std::process::Command::new(&exe)
                 .env("HERMES_DESKTOP_PORT", PORT.to_string())
                 .spawn()?;
             app.state::<SidecarChild>().0.lock().unwrap().replace(child);
-
-            // Forward sidecar output to the host process logs for debugging.
-            tauri::async_runtime::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        CommandEvent::Stdout(line) => {
-                            print!("[hermes] {}", String::from_utf8_lossy(&line));
-                        }
-                        CommandEvent::Stderr(line) => {
-                            eprint!("[hermes] {}", String::from_utf8_lossy(&line));
-                        }
-                        _ => {}
-                    }
-                }
-            });
 
             // Once the dashboard is listening, navigate the window from the
             // bundled splash to the live local server.
@@ -85,7 +126,7 @@ pub fn run() {
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app_handle.try_state::<SidecarChild>() {
-                    if let Some(child) = state.0.lock().unwrap().take() {
+                    if let Some(mut child) = state.0.lock().unwrap().take() {
                         let _ = child.kill();
                     }
                 }

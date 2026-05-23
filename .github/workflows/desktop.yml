@@ -24,16 +24,10 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            sidecar_ext: ""
-            bin_ext: ""
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            sidecar_ext: ""
-            bin_ext: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            sidecar_ext: ".exe"
-            bin_ext: ".exe"
 
     runs-on: ${{ matrix.os }}
 
@@ -83,7 +77,7 @@ jobs:
           npm ci
           npm run build
 
-      # 2. Build the Python sidecar (onefile) with PyInstaller.
+      # 2. Build the Python sidecar (onedir) with PyInstaller.
       - name: Build Python sidecar
         run: |
           python -m pip install --upgrade pip
@@ -94,13 +88,12 @@ jobs:
             --noconfirm
         shell: bash
 
-      # 3. Place the sidecar where Tauri's externalBin expects it, suffixed
-      #    with the Rust target triple.
+      # 3. Stage the onedir bundle as a Tauri resource.
       - name: Stage sidecar for Tauri
         run: |
-          mkdir -p packaging/desktop/tauri/src-tauri/binaries
-          cp "packaging/desktop/dist/hermes-desktop${{ matrix.sidecar_ext }}" \
-             "packaging/desktop/tauri/src-tauri/binaries/hermes-desktop-${{ matrix.target }}${{ matrix.bin_ext }}"
+          rm -rf packaging/desktop/tauri/src-tauri/sidecar
+          cp -r packaging/desktop/dist/hermes-desktop \
+                packaging/desktop/tauri/src-tauri/sidecar
         shell: bash
 
       - name: Install Tauri CLI
