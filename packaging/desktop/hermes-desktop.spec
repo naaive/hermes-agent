@@ -1,9 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Minimal PyInstaller spec freezing the Hermes dashboard (core + web extra).
+"""PyInstaller spec freezing the Hermes dashboard (core + web extra).
 
-Proof-of-concept scope: only the ``hermes dashboard`` code path. Optional
-backends (voice/matrix/messaging) are intentionally excluded — they are
-lazy-installed at runtime today, which does not work inside a frozen bundle.
+Produces a single self-contained executable (onefile) used as the Python
+sidecar for the Tauri desktop shell (``bundle.externalBin``). At runtime the
+onefile unpacks to a temp dir; the launcher points the static mount at the
+bundled SPA via ``sys._MEIPASS/web_dist``.
+
+Scope: only the ``hermes dashboard`` code path. Optional backends
+(voice/matrix/messaging) are intentionally excluded — they are lazy-installed
+at runtime today, which does not work inside a frozen bundle.
 """
 import os
 
@@ -37,21 +42,17 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name="hermes-desktop",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    name="hermes-desktop",
+    runtime_tmpdir=None,
+    # Windowed: no console flashes on Windows. The Tauri shell pipes the
+    # sidecar's stdio regardless, so logs are still captured. No effect on
+    # Linux/macOS plain executables.
+    console=False,
 )
