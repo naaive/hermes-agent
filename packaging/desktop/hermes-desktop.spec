@@ -59,6 +59,32 @@ web_dist = os.path.join(REPO, "hermes_cli", "web_dist")
 if os.path.isdir(web_dist):
     datas.append((web_dist, "web_dist"))
 
+# Plugins are discovered at runtime by scanning the filesystem and importing by
+# file path (providers/__init__.py loads plugins/model-providers/*; same for
+# plugins/memory, plugins/web, plugins/platforms, ...). That is invisible to
+# PyInstaller's import analysis, so the trees must be shipped as data — and they
+# are load-bearing: without plugins/model-providers the agent can't resolve any
+# model/provider. Dashboard UI panels are excluded (kanban not needed; example
+# is a test fixture; achievements is cosmetic) so the Plugins sidebar stays
+# empty rather than half-working.
+_PLUGIN_PANELS = {"kanban", "example-dashboard", "hermes-achievements"}
+plugins_root = os.path.join(REPO, "plugins")
+if os.path.isdir(plugins_root):
+    pkg_init = os.path.join(plugins_root, "__init__.py")
+    if os.path.isfile(pkg_init):
+        datas.append((pkg_init, "plugins"))
+    for entry in sorted(os.listdir(plugins_root)):
+        if entry in _PLUGIN_PANELS or entry.startswith((".", "__")):
+            continue
+        sub = os.path.join(plugins_root, entry)
+        if os.path.isdir(sub):
+            datas.append((sub, f"plugins/{entry}"))
+
+# CLI/agent locale strings (loaded by path, not import).
+locales = os.path.join(REPO, "locales")
+if os.path.isdir(locales):
+    datas.append((locales, "locales"))
+
 a = Analysis(
     [os.path.join(SPECPATH, "launcher.py")],
     pathex=[REPO],

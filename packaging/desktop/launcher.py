@@ -19,7 +19,27 @@ def _bundle_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _selftest() -> int:
+    """Smoke-test the frozen bundle: confirm bundled provider profiles load.
+
+    Provider profiles live in plugins/model-providers/ and are discovered by
+    filesystem scan + file-path import, so they are invisible to PyInstaller's
+    static analysis. This asserts they actually resolve from inside the bundle.
+    Run: ``hermes-desktop --selftest``.
+    """
+    from providers import list_providers
+
+    profiles = list_providers()
+    print(f"providers discovered: {len(profiles)}")
+    for p in profiles:
+        print(f"  - {getattr(p, 'name', None) or type(p).__name__}")
+    return 0 if profiles else 1
+
+
 def main() -> None:
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
+
     bundle = _bundle_dir()
     web_dist = bundle / "web_dist"
     # web_server reads WEB_DIST at import time, so set this before importing it.
