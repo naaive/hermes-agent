@@ -85,6 +85,13 @@ locales = os.path.join(REPO, "locales")
 if os.path.isdir(locales):
     datas.append((locales, "locales"))
 
+# Bundled skills tree. tools/skills_sync seeds it into ~/.hermes/skills on
+# first run (the launcher triggers this); the dashboard's Skills page reads
+# from there. Loaded by path, so invisible to import analysis.
+skills = os.path.join(REPO, "skills")
+if os.path.isdir(skills):
+    datas.append((skills, "skills"))
+
 a = Analysis(
     [os.path.join(SPECPATH, "launcher.py")],
     pathex=[REPO],

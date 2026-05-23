@@ -668,7 +668,10 @@ def _spawn_hermes_action(subcommand: List[str], name: str) -> subprocess.Popen:
     """Spawn ``hermes <subcommand>`` detached and record the Popen handle.
 
     Uses the running interpreter's ``hermes_cli.main`` module so the action
-    inherits the same venv/PYTHONPATH the web server is using.
+    inherits the same venv/PYTHONPATH the web server is using. In a frozen
+    PyInstaller bundle ``sys.executable`` is the app binary (not a Python), so
+    ``-m hermes_cli.main`` is invalid; instead re-invoke the binary directly and
+    let its launcher route the subcommand to the hermes CLI.
     """
     log_file_name = _ACTION_LOG_FILES[name]
     _ACTION_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -678,7 +681,10 @@ def _spawn_hermes_action(subcommand: List[str], name: str) -> subprocess.Popen:
         f"\n=== {name} started {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n".encode()
     )
 
-    cmd = [sys.executable, "-m", "hermes_cli.main", *subcommand]
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, *subcommand]
+    else:
+        cmd = [sys.executable, "-m", "hermes_cli.main", *subcommand]
 
     popen_kwargs: Dict[str, Any] = {
         "cwd": str(PROJECT_ROOT),
@@ -732,6 +738,14 @@ async def restart_gateway():
 @app.post("/api/hermes/update")
 async def update_hermes():
     """Kick off ``hermes update`` in the background."""
+    # `hermes update` upgrades a source/pip install in place — meaningless for a
+    # frozen desktop bundle, which is replaced by reinstalling. Refuse cleanly.
+    if getattr(sys, "frozen", False):
+        raise HTTPException(
+            status_code=400,
+            detail="Self-update is not available in the desktop app. "
+            "Reinstall the latest version to update.",
+        )
     try:
         proc = _spawn_hermes_action(["update"], "hermes-update")
     except Exception as exc:
@@ -3341,6 +3355,17 @@ def _resolve_chat_argv(
     the spawned ``tui_gateway.entry`` can mirror dispatcher emits to the
     dashboard's ``/api/pub`` endpoint (see :func:`pub_ws`).
     """
+    # Frozen desktop bundle: the Node TUI (ui-tui) and a Node runtime are not
+    # shipped, so run the Python chat CLI in the PTY instead by re-invoking the
+    # app binary's ``chat`` subcommand. Same conversation, no Node dependency.
+    if getattr(sys, "frozen", False):
+        env = os.environ.copy()
+        argv = [sys.executable, "chat"]
+        if resume:
+            latest_resume, _ = _session_latest_descendant(resume)
+            argv += ["--resume", latest_resume or resume]
+        return argv, None, env
+
     from hermes_cli.main import PROJECT_ROOT, _make_tui_argv
 
     argv, cwd = _make_tui_argv(PROJECT_ROOT / "ui-tui", tui_dev=False)
